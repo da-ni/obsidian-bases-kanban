@@ -374,13 +374,14 @@ describe('Integration Tests - Edge Cases', () => {
 		const board = view.containerEl.querySelector('.obk-board');
 		assert.ok(board, 'Board should be rendered');
 
-		// Entry without property should go to Uncategorized
+		// Entry without property should be silently skipped — no Uncategorized column
 		const uncategorizedColumn = Array.from(view.containerEl.querySelectorAll('.obk-column')).find((col) =>
 			col.getAttribute('data-column-value')?.includes('Uncategorized'),
 		);
+		assert.ok(!uncategorizedColumn, 'Uncategorized column should not exist');
 
-		assert.ok(uncategorizedColumn, 'Uncategorized column should exist');
-		const uncategorizedCards = uncategorizedColumn?.querySelectorAll('.obk-card');
-		assert.ok(uncategorizedCards && uncategorizedCards.length >= 1, 'Should have at least one uncategorized card');
+		// Only entries with valid status should have cards
+		const allCards = view.containerEl.querySelectorAll('.obk-card');
+		assert.strictEqual(allCards.length, 2, 'Only entries with status should be rendered');
 	});
 });

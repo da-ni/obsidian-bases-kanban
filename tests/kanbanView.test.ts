@@ -167,7 +167,7 @@ describe('Data Rendering - Entry Grouping', () => {
 		assert.strictEqual(toDoCards?.length, 2, 'To Do column should have 2 cards');
 	});
 
-	test('Handles null/undefined property values (map to Uncategorized)', () => {
+	test('Handles null/undefined property values (entries skipped)', () => {
 		const entries = createEntriesWithEmptyValues();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
@@ -177,15 +177,16 @@ describe('Data Rendering - Entry Grouping', () => {
 		setupKanbanViewWithApp(view, app);
 		triggerDataUpdate(view);
 
-		// Check for Uncategorized column
+		// Entries without a value for the grouped-by property should be
+		// silently skipped — no "Uncategorized" column created.
 		const columns = view.containerEl.querySelectorAll('.obk-column');
 		const uncategorizedColumn = Array.from(columns).find((col) =>
 			col.getAttribute('data-column-value')?.includes('Uncategorized'),
 		);
-		assert.ok(uncategorizedColumn, 'Uncategorized column should exist');
+		assert.ok(!uncategorizedColumn, 'Uncategorized column should not exist');
 	});
 
-	test('Handles empty string values (map to Uncategorized)', () => {
+	test('Handles empty string values (entries skipped)', () => {
 		const entries = createEntriesWithEmptyValues();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
@@ -199,7 +200,7 @@ describe('Data Rendering - Entry Grouping', () => {
 		const uncategorizedColumn = Array.from(columns).find((col) =>
 			col.getAttribute('data-column-value')?.includes('Uncategorized'),
 		);
-		assert.ok(uncategorizedColumn, 'Empty string values should map to Uncategorized');
+		assert.ok(!uncategorizedColumn, 'Empty string values should not create Uncategorized column');
 	});
 });
 
@@ -1704,7 +1705,7 @@ describe('Card Order - Persistence', () => {
 		app = createMockApp();
 	});
 
-	test('Same-column drop saves card order to config', async () => {
+	test('Same-column drop does not save card order (sort config is source of truth)', async () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
@@ -1726,12 +1727,14 @@ describe('Card Order - Persistence', () => {
 		const mockEvent = { item: cards[1], from: toDoBody, to: toDoBody, oldIndex: 1, newIndex: 0 };
 		await (view as any).handleCardDrop(mockEvent);
 
+		// Same-column drops should NOT save card orders — the base view's
+		// sort config is the single source of truth for card positioning.
 		const savedOrders = controller.config.get('cardOrders') as Record<string, Record<string, string[]>>;
-		assert.ok(savedOrders, 'cardOrders should be saved');
-		const columnOrder = savedOrders?.[PROPERTY_STATUS]?.['To Do'];
-		assert.ok(Array.isArray(columnOrder), 'To Do card order should be an array');
-		assert.strictEqual(columnOrder[0], cards[1].getAttribute('data-entry-path'), 'Moved card should be first');
-		assert.strictEqual(columnOrder[1], cards[0].getAttribute('data-entry-path'), 'Original first card should be second');
+		const statusOrders = savedOrders?.[PROPERTY_STATUS] ?? {};
+		assert.ok(
+			!statusOrders['To Do'] || statusOrders['To Do'].length === 0,
+			'To Do card order should not be saved on same-column drop',
+		);
 	});
 
 	test('Same-column drop does not call processFrontMatter', async () => {
@@ -1757,7 +1760,7 @@ describe('Card Order - Persistence', () => {
 		assert.strictEqual(app.fileManager.processFrontMatter.calls.length, 0, 'processFrontMatter should not be called');
 	});
 
-	test('Cross-column drop saves card order for both columns', async () => {
+	test('Cross-column drop does not save card order (preserves sort)', async () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
@@ -1778,7 +1781,6 @@ describe('Card Order - Persistence', () => {
 		const doingBody = doingColumn.querySelector('.obk-column-body') as HTMLElement;
 
 		const card = toDoBody.querySelector('.obk-card') as HTMLElement;
-		const movedPath = card.getAttribute('data-entry-path');
 
 		// Simulate Sortable: move card from To Do body to Doing body
 		toDoBody.removeChild(card);
@@ -1787,16 +1789,17 @@ describe('Card Order - Persistence', () => {
 		const mockEvent = { item: card, from: toDoBody, to: doingBody, oldIndex: 0, newIndex: 1 };
 		await (view as any).handleCardDrop(mockEvent);
 
+		// Cross-column drops should NOT save card orders — the base view's
+		// sort config should determine card positions after re-render.
 		const savedOrders = controller.config.get('cardOrders') as Record<string, Record<string, string[]>>;
-		assert.ok(savedOrders?.[PROPERTY_STATUS]?.['To Do'], 'To Do order should be saved');
-		assert.ok(savedOrders?.[PROPERTY_STATUS]?.['Doing'], 'Doing order should be saved');
+		const statusOrders = savedOrders?.[PROPERTY_STATUS] ?? {};
 		assert.ok(
-			!savedOrders[PROPERTY_STATUS]['To Do'].includes(movedPath!),
-			'Moved card should not be in old column saved order',
+			!statusOrders['To Do'] || statusOrders['To Do'].length === 0,
+			'To Do card order should not be saved on cross-column drop',
 		);
 		assert.ok(
-			savedOrders[PROPERTY_STATUS]['Doing'].includes(movedPath!),
-			'Moved card should be in new column saved order',
+			!statusOrders['Doing'] || statusOrders['Doing'].length === 0,
+			'Doing card order should not be saved on cross-column drop',
 		);
 	});
 
@@ -1869,7 +1872,7 @@ describe('Card Order - Persistence', () => {
 		assert.strictEqual(cardPaths[1], 'Task 1.md', 'Unsaved card should appear at the end');
 	});
 
-	test('Regression: re-render after same-column drag preserves dragged order', async () => {
+	test('Re-render after same-column drag reverts to sort-config order', async () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
@@ -1894,7 +1897,7 @@ describe('Card Order - Persistence', () => {
 		const mockEvent = { item: cards[1], from: toDoBody, to: toDoBody, oldIndex: 1, newIndex: 0 };
 		await (view as any).handleCardDrop(mockEvent);
 
-		// Re-render — data hasn't changed, so Bases still returns original order
+		// Re-render — no saved card order, so Bases sort order is restored
 		triggerDataUpdate(view);
 
 		const reRenderedToDoColumn = Array.from(view.containerEl.querySelectorAll('.obk-column')).find(
@@ -1904,9 +1907,9 @@ describe('Card Order - Persistence', () => {
 			c.getAttribute('data-entry-path'),
 		);
 
-		// Should preserve dragged order, not revert to original Bases order
-		assert.strictEqual(reRenderedPaths[0], originalSecond, 'Dragged card should remain first after re-render');
-		assert.strictEqual(reRenderedPaths[1], originalFirst, 'Original first card should remain second after re-render');
+		// Should revert to Bases sort order, not preserve dragged order
+		assert.strictEqual(reRenderedPaths[0], originalFirst, 'Sort-config order should be restored after re-render');
+		assert.strictEqual(reRenderedPaths[1], originalSecond, 'Sort-config order should be restored after re-render');
 	});
 });
 

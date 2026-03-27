@@ -232,7 +232,7 @@ export class KanbanView extends BasesView {
 			// This is the only place render() calls _persistPrefs(), and only when
 			// new columns appear — not on every render pass.
 			const liveValues = Array.from(groupedEntries.keys());
-			const newValues = liveValues.filter((v) => !this._prefs.columnOrder.includes(v));
+			const newValues = liveValues.filter((v) => v !== UNCATEGORIZED_LABEL && !this._prefs.columnOrder.includes(v));
 			if (newValues.length > 0) {
 				if (this._prefs.columnOrder.length === 0) {
 					// No prior order — sort alphabetically as the initial ordering
@@ -396,12 +396,15 @@ export class KanbanView extends BasesView {
 			try {
 				const propValue = entry.getValue(propertyId);
 				const value = normalizePropertyValue(propValue);
+				// Skip entries with no value for the grouped-by property.
+				// This prevents an "Uncategorized" column from appearing
+				// when a file is briefly empty (e.g. before a Templater
+				// folder template fills in the frontmatter).
+				if (value === UNCATEGORIZED_LABEL) return;
 				const group = ensureGroupExists(grouped, value);
 				group.push(entry);
 			} catch (error) {
 				console.warn('Error processing entry:', entry.file.path, error);
-				const uncategorizedGroup = ensureGroupExists(grouped, UNCATEGORIZED_LABEL);
-				uncategorizedGroup.push(entry);
 			}
 		});
 
@@ -456,6 +459,21 @@ export class KanbanView extends BasesView {
 		cardEl.className = CSS_CLASSES.CARD;
 		const filePath = entry.file.path;
 		cardEl.setAttribute(DATA_ATTRIBUTES.ENTRY_PATH, filePath);
+
+		// Expose frontmatter properties as data attributes on the card element.
+		// This enables CSS-based styling of cards by property values, e.g.:
+		//   .obk-card[data-pinned="true"] { border-left: 3px solid gold; }
+		//   .obk-card[data-project="aiCAMPUS"] { ... }
+		const allPropertyIds = this.allProperties || [];
+		for (const propertyId of allPropertyIds) {
+			if (propertyId.startsWith('file.')) continue;
+			const value = entry.getValue(propertyId);
+			if (value === null || value === undefined) continue;
+			const valueStr = value.toString().trim();
+			if (!valueStr || valueStr === 'null') continue;
+			const parsedId = parsePropertyId(propertyId);
+			cardEl.setAttribute(`data-${parsedId.name}`, valueStr);
+		}
 
 		const titleEl = cardEl.createDiv({ cls: CSS_CLASSES.CARD_TITLE });
 		titleEl.textContent = entry.file.basename;
@@ -666,20 +684,19 @@ export class KanbanView extends BasesView {
 				.map((c) => (c instanceof HTMLElement ? c.getAttribute(DATA_ATTRIBUTES.ENTRY_PATH) : null))
 				.filter((p): p is string => p !== null);
 
-		// Same-column reorder: update prefs and persist
+		// Same-column reorder: no-op. Let the base view's sort config
+		// (e.g. pinned DESC, mtime DESC) determine card order. Manual
+		// in-column drag order is intentionally not persisted — the sort
+		// config is the single source of truth for card positioning.
 		if (oldColumnValue === newColumnValue) {
-			this._prefs.cardOrders[newColumnValue] = getColumnPaths(evt.to);
-			this._persistPrefs();
+			// Sortable moved the card in the DOM — trigger a re-render
+			// to snap it back to the sort-config position.
+			this._debouncedRender();
 			return;
 		}
 
-		// Cross-column drop: capture DOM order for both columns
-		if (oldColumnEl instanceof HTMLElement && oldColumnValue) {
-			const oldBody = oldColumnEl.querySelector(`.${CSS_CLASSES.COLUMN_BODY}`);
-			if (oldBody) this._prefs.cardOrders[oldColumnValue] = getColumnPaths(oldBody);
-		}
-		this._prefs.cardOrders[newColumnValue] = getColumnPaths(evt.to);
-		this._persistPrefs();
+		// Cross-column drop: only update the frontmatter property (below).
+		// cardOrders are never saved — sort config determines position.
 
 		const entry = this._entryMap.get(entryPath);
 		if (!entry) {
